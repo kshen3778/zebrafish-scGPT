@@ -111,13 +111,16 @@ model.to(device)
 
 print("Loading dataset")
 # Specify data path; here we load the Immune Human dataset
-data_dir = Path("./data")
+data_dir = Path("./data/immune_human")
 adata = sc.read(
     str(data_dir / "immune_all_human2.h5ad"), cache=True
 )  # 33506 × 12303
 ori_batch_col = "batch"
 adata.obs["celltype"] = adata.obs["final_annotation"].astype(str)
 data_is_raw = False
+print(adata)
+adata = adata[0:10, :]
+print("After subsetting")
 print(adata)
 
 print("Preprocess data in scGPT")
@@ -137,3 +140,26 @@ preprocessor = Preprocessor(
     result_binned_key="X_binned",  # the key in adata.layers to store the binned data
 )
 preprocessor(adata, batch_key="batch")
+
+print("Retrieving Gene embeddings")
+# Retrieve the data-independent gene embeddings from scGPT
+gene_ids = np.array([id for id in gene2idx.values()])
+gene_embeddings = model.encoder(torch.tensor(gene_ids, dtype=torch.long).to(device))
+gene_embeddings = gene_embeddings.detach().cpu().numpy()
+# Filter on the intersection between the Immune Human HVGs found in step 1.2 and scGPT's 30+K foundation model vocab
+gene_embeddings = {gene: gene_embeddings[i] for i, gene in enumerate(gene2idx.keys()) if gene in adata.var.index.tolist()}
+print('Retrieved gene embeddings for {} genes.'.format(len(gene_embeddings)))
+# Construct gene embedding network
+embed = GeneEmbedding(gene_embeddings)
+
+print("Perform clustering")
+# Perform Louvain clustering with desired resolution; here we specify resolution=40
+gdata = embed.get_adata(resolution=40)
+# Retrieve the gene clusters
+metagenes = embed.get_metagenes(gdata)
+# Obtain the set of gene programs from clusters with #genes >= 5
+mgs = dict()
+for mg, genes in metagenes.items():
+    if len(genes) > 4:
+        mgs[mg] = genes
+print(mgs)
